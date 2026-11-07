@@ -6,8 +6,8 @@ android {
         applicationId 'com.requiredtruth.voice2ai2voice'
         minSdk 26
         targetSdk 35
-        versionCode (System.getenv('VERSION_CODE') ?: '1').toInteger()
-        versionName System.getenv('VERSION_NAME') ?: '1.0.0'
+        versionCode = (System.getenv('VERSION_CODE') ?: '1').toInteger()
+        versionName = (System.getenv('VERSION_NAME') ?: '1.0.0')
     }
     buildTypes { release { signingConfig signingConfigs.debug; minifyEnabled false } }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
