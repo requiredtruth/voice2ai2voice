@@ -19,6 +19,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
+          log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
@@ -39,7 +42,7 @@ jobs:
           else
             keytool -genkeypair -noprompt -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -dname 'CN=Voice2AI2Voice, O=RequiredTruth, C=US' -keyalg RSA -keysize 2048 -validity 10000
           fi
-      - name: Preserve signing key privately for future updates
+      - name: Preserve development signing key for future updates
         uses: actions/upload-artifact@v4
         with:
           name: android-signing-key
