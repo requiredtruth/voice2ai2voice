@@ -16,10 +16,17 @@ public final class ChatApi {
         return new URI(scheme, null, uri.getHost(), uri.getPort(), path, null, null).toURL();
     }
     public static JSONObject request(String model, String text) throws JSONException {
-        return new JSONObject().put("model", model).put("stream", false).put("max_tokens", 4096)
-            .put("messages", new JSONArray()
-                .put(new JSONObject().put("role", "system").put("content", "Answer the user directly in plain spoken language. Return only your final answer. Do not include thinking, analysis, or reasoning traces. Be concise unless asked for detail."))
-                .put(new JSONObject().put("role", "user").put("content", text)));
+        return request(model, new JSONArray().put(message("user", text)), false);
+    }
+    public static JSONObject message(String role, String text) throws JSONException {
+        return new JSONObject().put("role", role).put("content", text);
+    }
+    public static JSONObject request(String model, JSONArray history, boolean generateUser) throws JSONException {
+        JSONArray messages = new JSONArray().put(message("system", "Answer the user directly in plain spoken language. Return only your final answer. Do not include thinking, analysis, or reasoning traces. Be concise unless asked for detail."));
+        // Copy the complete session: never mutate it or silently drop old turns.
+        for (int i=0;i<history.length();i++) messages.put(new JSONObject(history.getJSONObject(i).toString()));
+        if (generateUser) messages.put(message("system", "For this turn only, play the USER in this conversation. Write only the user's next natural follow-up message to the last assistant response. Do not answer it, label roles, or include reasoning. Continue the topic concisely."));
+        return new JSONObject().put("model", model).put("stream", false).put("max_tokens", 4096).put("messages", messages);
     }
     public static String answer(String body) throws JSONException {
         JSONObject root = new JSONObject(body);

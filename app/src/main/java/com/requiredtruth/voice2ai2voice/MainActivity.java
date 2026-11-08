@@ -26,7 +26,9 @@ public class MainActivity extends Activity {
     private SpeechRecognizer recognizer;
     private TextToSpeech tts;
     private boolean ttsReady=false, listening=false, waiting=false, speaking=false, destroyed=false;
-    private Button talk, send, replay, settings;
+    private Button talk, convo, selfTalk, stop, send, replay, settings;
+    private final Conversation session=new Conversation();
+    private boolean generatedUserSpeech=false, permissionPending=false;
     private TextView status, answer;
     private EditText transcript;
     private SharedPreferences prefs;
@@ -71,23 +73,31 @@ public class MainActivity extends Activity {
         root.setOnApplyWindowInsetsListener((v,insets) -> { v.setPadding(dp(24),dp(20)+insets.getSystemWindowInsetTop(),dp(24),dp(24)+insets.getSystemWindowInsetBottom()); return insets; });
         TextView eyebrow=label("SPEAK. ASK. HEAR.",12,mint); root.addView(eyebrow);
         TextView title=label("Voice → AI → Voice",30,ink); title.setTypeface(null,Typeface.BOLD); root.addView(title);
-        root.addView(label("One tap. A fresh conversation every time.",15,muted));
+        root.addView(label("Speak once, keep a conversation going, or let the AI talk to itself.",15,muted));
         settings=button("Server settings"); root.addView(settings); settings.setOnClickListener(v -> showSettings());
         status=label("Ready to listen",16,mint); status.setMinHeight(dp(70)); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); root.addView(status);
         talk=button("●  Tap to speak"); talk.setTextColor(Color.rgb(16,28,36)); talk.setTextSize(21); talk.setTypeface(null,Typeface.BOLD);
         GradientDrawable bg=new GradientDrawable(); bg.setColor(mint); bg.setCornerRadius(dp(28)); talk.setBackground(bg);
-        root.addView(talk,new LinearLayout.LayoutParams(-1,dp(104))); talk.setOnClickListener(v -> { if(listening||waiting||speaking) cancel(); else startListening(); });
+        root.addView(talk,new LinearLayout.LayoutParams(-1,dp(104))); talk.setOnClickListener(v -> { if(listening||waiting||speaking) cancel(); else begin(Conversation.Mode.SINGLE); });
+        convo=button("Convo mode"); root.addView(convo);
+        convo.setOnClickListener(v -> { if(session.mode()==Conversation.Mode.CONVERSATION) cancel(); else begin(Conversation.Mode.CONVERSATION); });
+        selfTalk=button("Talk to yourself"); root.addView(selfTalk);
+        selfTalk.setOnClickListener(v -> { if(session.mode()==Conversation.Mode.SELF_TALK) cancel(); else begin(Conversation.Mode.SELF_TALK); });
+        stop=button("STOP"); root.addView(stop); stop.setOnClickListener(v -> cancel());
+        root.addView(label("Convo listens again after each answer. Self-talk uses your opening voice, then speaks both sides until stopped. Each mode starts fresh.",13,muted));
         root.addView(label("YOUR WORDS",12,muted));
         transcript=new EditText(this); transcript.setTextColor(ink); transcript.setHintTextColor(muted); transcript.setTextSize(17); transcript.setHint("Your speech appears here. You can also type."); transcript.setMinLines(2); transcript.setMaxLines(6); transcript.setGravity(Gravity.TOP); transcript.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|InputType.TYPE_TEXT_FLAG_CAP_SENTENCES); root.addView(transcript);
-        send=button("Send text as a new conversation"); root.addView(send); send.setOnClickListener(v -> submit(transcript.getText().toString()));
+        send=button("Send text as a new conversation"); root.addView(send); send.setOnClickListener(v -> { String words=transcript.getText().toString(); cancelSilently(); session.start(Conversation.Mode.SINGLE); submit(words); });
         root.addView(label("AI RESPONSE",12,muted)); answer=label("Your answer will appear here and be read aloud.",19,ink); answer.setTextIsSelectable(true); root.addView(answer);
         replay=button("Read answer again"); root.addView(replay); replay.setOnClickListener(v -> speak(finalAnswer));
-        root.addView(label("Recognition and playback use your Android speech services. Only the recognized text is sent to your configured AI server.",12,muted));
+        root.addView(label("Recognition and playback use your Android speech services. Text is sent to your AI server. Convo and self-talk include the full active conversation.",12,muted));
         setContentView(scroll); updateButtons();
     }
     private void updateButtons() {
         if(talk==null) return;
         talk.setText(listening ? "■  Cancel listening" : waiting ? "■  Cancel request" : speaking ? "■  Stop voice" : "●  Tap to speak");
+        convo.setText(session.mode()==Conversation.Mode.CONVERSATION ? "■  End convo mode" : "Convo mode");
+        selfTalk.setText(session.mode()==Conversation.Mode.SELF_TALK ? "■  End self-talk" : "Talk to yourself");
         send.setEnabled(!listening&&!waiting&&!speaking); settings.setEnabled(!listening&&!waiting&&!speaking); replay.setEnabled(ttsReady&&!finalAnswer.isEmpty()&&!listening&&!waiting&&!speaking);
     }
     private void showSettings() {
@@ -114,10 +124,16 @@ public class MainActivity extends Activity {
     private EditText field(LinearLayout form,String name,String value,int type) {
         form.addView(label(name,14,muted)); EditText field=new EditText(this); field.setText(value); field.setTextColor(ink); field.setInputType(type); field.setSingleLine(true); field.setSaveEnabled(false); form.addView(field); return field;
     }
+    private void begin(Conversation.Mode mode) {
+        cancelSilently(); generatedUserSpeech=false; session.start(mode); startListening();
+    }
+    private void fail(String message) {
+        cancelSilently(); generatedUserSpeech=false; session.stop(); status.setText(message); updateButtons();
+    }
     private void startListening() {
-        if(prefs.getString("url","").isEmpty()) { showSettings(); return; }
-        if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) { requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},10); return; }
-        if(!SpeechRecognizer.isRecognitionAvailable(this)) { status.setText("No speech recognition service installed. Enable Android speech recognition or type below."); return; }
+        if(prefs.getString("url","").isEmpty()) { session.stop(); updateButtons(); showSettings(); return; }
+        if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) { permissionPending=true; updateButtons(); requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},10); return; }
+        if(!SpeechRecognizer.isRecognitionAvailable(this)) { fail("No speech recognition service installed. Enable Android speech recognition or type below."); return; }
         cancelSilently(); final int token=generation;
         recognizer=SpeechRecognizer.createSpeechRecognizer(this);
         recognizer.setRecognitionListener(new RecognitionListener() {
@@ -138,45 +154,53 @@ public class MainActivity extends Activity {
                     case SpeechRecognizer.ERROR_NETWORK: case SpeechRecognizer.ERROR_NETWORK_TIMEOUT: reason="Speech recognition network error. Try again or type below."; break;
                     default: reason="Speech recognition failed ("+error+"). Try again or type below.";
                 }
-                status.setText(reason); updateButtons();
+                fail(reason);
             }
             public void onResults(Bundle b) {
                 if(token!=generation) return;
                 ArrayList<String> words=b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                 listening=false; releaseRecognizer();
-                if(words==null||words.isEmpty()) { status.setText("No speech recognized. Try again."); updateButtons(); return; }
+                if(words==null||words.isEmpty()) { fail("No speech recognized. Try again."); return; }
                 transcript.setText(words.get(0)); submit(words.get(0));
             }
             private void setTranscript(Bundle b) { ArrayList<String> words=b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION); if(words!=null&&!words.isEmpty()) transcript.setText(words.get(0)); }
         });
         Intent intent=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_LANGUAGE,Locale.getDefault().toLanguageTag()).putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true).putExtra(RecognizerIntent.EXTRA_MAX_RESULTS,1);
         try { listening=true; transcript.setText(""); status.setText("Starting microphone…"); updateButtons(); recognizer.startListening(intent); }
-        catch(Exception e) { listening=false; releaseRecognizer(); status.setText("Cannot start speech recognition. Check your Android speech service."); updateButtons(); }
+        catch(Exception e) { fail("Cannot start speech recognition. Check your Android speech service."); }
     }
     @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results) {
         super.onRequestPermissionsResult(request,permissions,results);
-        if(request==10 && results.length>0 && results[0]==PackageManager.PERMISSION_GRANTED) startListening();
-        else status.setText("Microphone permission denied. You can type below or enable it in Android app settings.");
+        if(request!=10 || !permissionPending) return;
+        permissionPending=false;
+        if(results.length>0 && results[0]==PackageManager.PERMISSION_GRANTED) startListening();
+        else fail("Microphone permission denied. You can type below or enable it in Android app settings.");
     }
     private void submit(String words) {
         if(words.trim().isEmpty()) { status.setText("Speak or type a question first."); return; }
-        if(prefs.getString("url","").isEmpty()) { showSettings(); return; }
+        if(prefs.getString("url","").isEmpty()) { session.stop(); updateButtons(); showSettings(); return; }
+        try { session.add("user",words); } catch(Exception e) { fail("Could not prepare conversation."); return; }
+        requestAnswer(false);
+    }
+    private void requestAnswer(boolean generateUser) {
         final URL url;
-        try { url=ChatApi.endpoint(prefs.getString("url",""),prefs.getBoolean("http",false)); }
-        catch(Exception e) { status.setText(e.getMessage()); return; }
+        final String payload;
+        try { url=ChatApi.endpoint(prefs.getString("url",""),prefs.getBoolean("http",false)); payload=session.payload(prefs.getString("model",""),generateUser); }
+        catch(Exception e) { fail(e.getMessage()); return; }
         cancelSilently(); final int token=generation;
-        final String model=prefs.getString("model",""), key=apiKey;
-        finalAnswer=""; answer.setText(""); waiting=true; status.setText("Waiting for the AI…"); updateButtons();
+        final String key=apiKey;
+        if(!generateUser) { finalAnswer=""; answer.setText(""); } waiting=true; status.setText(generateUser?"AI is writing the next user turn…":"Waiting for the AI…"); updateButtons();
         job=executor.submit(() -> {
             HttpURLConnection connection=null;
             try {
                 connection=(HttpURLConnection)url.openConnection();
                 if(token!=generation) return;
                 activeConnection=connection;
+                if(token!=generation) return;
                 connection.setConnectTimeout(20000); connection.setReadTimeout(120000); connection.setInstanceFollowRedirects(false);
                 connection.setRequestMethod("POST"); connection.setDoOutput(true); connection.setRequestProperty("Content-Type","application/json; charset=utf-8"); connection.setRequestProperty("Accept","application/json");
                 if(!key.isEmpty()) connection.setRequestProperty("Authorization","Bearer "+key);
-                byte[] body=ChatApi.request(model,words).toString().getBytes(StandardCharsets.UTF_8);
+                byte[] body=payload.getBytes(StandardCharsets.UTF_8);
                 connection.setFixedLengthStreamingMode(body.length);
                 try(java.io.OutputStream out=connection.getOutputStream()) { out.write(body); }
                 int code=connection.getResponseCode();
@@ -184,38 +208,51 @@ public class MainActivity extends Activity {
                 String result=ChatApi.answer(ChatApi.read(connection.getInputStream()));
                 runOnUiThread(() -> {
                     if(token!=generation||destroyed) return;
-                    waiting=false; finalAnswer=result; answer.setText(result); speak(result);
+                    waiting=false;
+                    try { session.add(generateUser?"user":"assistant",result); }
+                    catch(Exception e) { fail("Could not retain conversation."); return; }
+                    generatedUserSpeech=generateUser;
+                    if(generateUser) transcript.setText(result);
+                    else { finalAnswer=result; answer.setText(result); }
+                    speak(result);
                 });
             } catch(Exception e) {
                 String message=e instanceof java.net.SocketTimeoutException ? "Server timed out. Tap to try again." : e instanceof java.io.IOException ? "Could not reach the server. Check its address and your connection." : e.getMessage();
-                runOnUiThread(() -> { if(token!=generation||destroyed) return; waiting=false; status.setText(message==null?"Request failed. Please try again.":message); updateButtons(); });
+                runOnUiThread(() -> { if(token!=generation||destroyed) return; fail(message==null?"Request failed. Please try again.":message); });
             } finally { if(connection!=null) connection.disconnect(); if(token==generation) activeConnection=null; }
         });
     }
     private void speak(String text) {
-        if(!ttsReady) { status.setText("Answer ready. Voice is unavailable; enable a text-to-speech engine in Android settings."); updateButtons(); return; }
+        if(!ttsReady) { fail("Answer ready. Voice is unavailable; enable a text-to-speech engine in Android settings."); return; }
         if(text.isEmpty()) return;
-        tts.stop(); speaking=true; status.setText("Speaking the answer…"); updateButtons();
+        cancelSilently(); speaking=true; status.setText(generatedUserSpeech?"Speaking the AI-generated user turn…":"Speaking the answer…"); updateButtons();
         List<String> chunks=AnswerText.chunks(text,Math.min(3000,TextToSpeech.getMaxSpeechInputLength()-1));
         for(int i=0;i<chunks.size();i++) {
             String id=generation+":"+i+(i==chunks.size()-1?":last":"");
-            if(tts.speak(chunks.get(i),i==0?TextToSpeech.QUEUE_FLUSH:TextToSpeech.QUEUE_ADD,null,id)==TextToSpeech.ERROR) { tts.stop(); speaking=false; status.setText("Could not play voice. Your answer is shown above."); updateButtons(); break; }
+            if(tts.speak(chunks.get(i),i==0?TextToSpeech.QUEUE_FLUSH:TextToSpeech.QUEUE_ADD,null,id)==TextToSpeech.ERROR) { fail("Could not play voice. Text is shown above."); break; }
         }
     }
     private void finishSpeech(String id,boolean error) {
-        runOnUiThread(() -> { if(destroyed||!id.startsWith(generation+":")) return; speaking=false; if(error&&tts!=null) tts.stop(); status.setText(error?"Voice playback failed. Your answer is shown above.":"Ready. Tap to ask a new question."); updateButtons(); });
+        runOnUiThread(() -> {
+            if(destroyed || !speaking || !id.startsWith(generation+":")) return;
+            speaking=false;
+            if(error) { fail("Voice playback failed. Text is shown above."); return; }
+            if(session.mode()==Conversation.Mode.CONVERSATION) startListening();
+            else if(session.mode()==Conversation.Mode.SELF_TALK) requestAnswer(!generatedUserSpeech);
+            else { status.setText("Ready. Tap to ask a new question."); updateButtons(); }
+        });
     }
     private void releaseRecognizer() { if(recognizer!=null) { recognizer.destroy(); recognizer=null; } }
     private void cancelSilently() {
-        generation++; listening=false; waiting=false; speaking=false;
+        generation++; permissionPending=false; listening=false; waiting=false; speaking=false;
         if(recognizer!=null) { recognizer.cancel(); releaseRecognizer(); }
         if(tts!=null) tts.stop();
         if(job!=null) job.cancel(true);
         HttpURLConnection connection=activeConnection; activeConnection=null;
         if(connection!=null) new Thread(connection::disconnect,"cancel-request").start();
     }
-    private void cancel() { cancelSilently(); status.setText("Stopped. Tap to start a fresh question."); updateButtons(); }
-    @Override protected void onStop() { super.onStop(); cancelSilently(); status.setText("Ready. Tap to ask a new question."); updateButtons(); }
+    private void cancel() { cancelSilently(); generatedUserSpeech=false; session.stop(); status.setText("Stopped. Tap to start a fresh question."); updateButtons(); }
+    @Override protected void onStop() { super.onStop(); cancelSilently(); generatedUserSpeech=false; session.stop(); status.setText("Ready. Tap to ask a new question."); updateButtons(); }
     @Override protected void onSaveInstanceState(Bundle out) { out.putString("transcript",transcript.getText().toString()); out.putString("answer",finalAnswer); super.onSaveInstanceState(out); }
     @Override protected void onDestroy() { destroyed=true; cancelSilently(); if(tts!=null) tts.shutdown(); executor.shutdownNow(); super.onDestroy(); }
 }

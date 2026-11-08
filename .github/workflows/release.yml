@@ -71,7 +71,9 @@ jobs:
 
           Configure your server URL, exact model ID, and optional API key in Server settings. Android speech recognition and text-to-speech services are required for voice input/output; typed input is also available.
 
-          Reasoning fields and tagged thinking blocks are excluded from playback. Cancel listening, requests, or playback with the main button. Each question starts fresh.
+          Reasoning fields and tagged thinking blocks are excluded from playback. Convo mode reopens the microphone after each spoken answer and sends the full conversation history. Talk to yourself uses your opening voice, then generates and speaks both sides until stopped. STOP cancels all active work; tapping an active mode again also ends it. The normal voice/text buttons always start fresh.
+
+          Leaving the app or a speech/server error stops automatic modes. Self-talk makes repeated server requests until stopped.
 
           Native Android 8.0+ APK, signed for sideload installation. Tests and Android release lint must pass before publication. Physical-device microphone and speaker testing remains to be done.
           NOTES
